@@ -7,7 +7,6 @@ import rasterio
 from rasterio.transform import from_bounds
 
 def extract_black_pixels(image_path, tolerance=10):
-    # Read the image
     image = cv2.imread(image_path)
     if image is None:
         raise ValueError("Image not found. Please check the path.")

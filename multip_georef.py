@@ -5,15 +5,15 @@ import re
 import geopandas as gpd
 import rasterio
 from rasterio.transform import from_bounds
+import multiprocessing
+from functools import partial
 
-def process_images_in_directory(image_dir, output_dir, geojson_file):
-    # Iterate over all images in the directory
-    for filename in os.listdir(image_dir):
+def process_single_image(image_dir, output_dir, geojson_file, filename):
+    try:
         image_path = os.path.join(image_dir, filename)
 
-        # Skip non-image files
         if not filename.lower().endswith(('.png', '.jpg', '.jpeg')):
-            continue
+            return None
 
         # Load the image
         image = cv2.imread(image_path)
@@ -107,7 +107,6 @@ def process_images_in_directory(image_dir, output_dir, geojson_file):
         x_min, y_min = corners_array.min(axis=0)
         x_max, y_max = corners_array.max(axis=0)
 
-        # Step 8: Format and check if the image exists in the GeoJSON file
         pattern = r"(\d{2} [A-Z])\](\d{2})"
         match = re.search(pattern, filename)
         if match:
@@ -128,21 +127,33 @@ def process_images_in_directory(image_dir, output_dir, geojson_file):
             transform = from_bounds(minx, miny, maxx, maxy, width, height)
 
             # Define CRS (coordinate reference system)
-            crs = "epsg:4326"  # Assuming WGS84, modify if needed
+            crs = "epsg:4326"
 
-            # Create a geotiff file using rasterio
             with rasterio.open(os.path.join(output_dir, f"{filename.split('.')[0]}.tif"), 'w', 
                    driver='GTiff', height=cropped_image.shape[0], width=cropped_image.shape[1],
                    count=3, dtype='uint8', crs=crs, transform=transform) as dst:
-                # If the cropped_image is in RGB format, you may want to write R, G, B in the correct order.
-                # Check if the image is in BGR (common in OpenCV) and adjust accordingly.
                 
-                # If BGR format (common for OpenCV), convert to RGB:
                 if cropped_image.shape[2] == 3:
                     cropped_image = cropped_image[..., ::-1]  # Flip channels from BGR to RGB
 
-                # Write the individual channels in the correct band order (R, G, B).
-                for i in range(1, 4):  # Assuming 3 bands (RGB)
+                for i in range(1, 4):
                     dst.write(cropped_image.transpose(2, 0, 1)[i-1], i)
+        return True
+    except Exception as e:
+        print(f"error processing {filename}: {e}")
+        return False
 
-process_images_in_directory('dataset', 'georef_tifs', 'soi_osm_sheet_index.geojson.json')
+def process_images_in_directory(image_dir, output_dir, geojson_file):
+    num_cores = os.cpu_count()
+    image_files = [f for f in os.listdir(image_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+    process_func = partial(process_single_image, image_dir, output_dir, geojson_file)
+
+    with multiprocessing.Pool(processes=num_cores) as pool:
+        results = pool.map(process_func, image_files)
+    
+    successful = sum(1 for result in results if result)
+    failed = sum(1 for result in results if result is False)
+    print(f"Processed {successful} images successfully, {failed} failed.")
+
+if __name__ == '__main__':
+    process_images_in_directory('dataset', 'georef_tifs', 'soi_osm_sheet_index.geojson.json')
